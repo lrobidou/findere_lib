@@ -1,0 +1,1 @@
+- [ ] Check that all dependencies were move from findere to findere_lib

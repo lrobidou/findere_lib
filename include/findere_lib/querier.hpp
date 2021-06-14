@@ -1,179 +1,139 @@
 #pragma once
-#include <robin_hood.h>
 
-#include <bf/all.hpp>
+#include <findere_lib/reader/file_manager.hpp>
+#include <vector>
+#include <zstr.hpp>
 
-#include "../../src/utils.hpp"
 #include "customAMQ.hpp"
+#include "customResponse.hpp"
 
-inline bool oneQuery(bf::bloom_filter* filter, const std::string s) {
-    return filter->lookup(s);
-}
+namespace findere_internal {
 
-inline bool oneQuery(const robin_hood::unordered_set<std::string>& hashSet, const std::string& s) {
-    return hashSet.contains(s);
-}
-
-inline bool oneQuery(const customAMQ& amq, const std::string& s) {
-    return amq.contains(s);
-}
-template <typename T>
-inline unsigned long long getNextPositiveKmerPositionInTheQuery(T filterOrTruth, const std::string& s, unsigned int k, const unsigned long long& nbNeighboursMin, unsigned long long j, unsigned long long& nbQuery) {
-    // std::cout << "getNextPositiveKmerPositionInTheQuery: " << k << " " << j << std::endl;
-    unsigned long long numberOfJumps = 0;
+/**
+ * @brief Query using findere.
+ * @param filterOrTruth the amq wrapped within a customAMQ
+ * @param s the sequence to be queried
+ * @param K the value for (big) k
+ * @param z the current position being queried in s
+ * @param canonical do we query canonical kmers ?
+ * @return The result of findere's query on s.
+ */
+inline std::vector<bool> queryFilterOrTruth(const customAMQ& amq, const std::string& s, const unsigned int& K, const unsigned int& z, const bool& canonical) {
+    const unsigned int k = K - z;
     unsigned long long size = s.size();
-    do {
-        // std::cout << j + numberOfJumps * nbNeighboursMin << " is false." << std::endl;
-        numberOfJumps += 1;
-        nbQuery++;
-    } while ((j + numberOfJumps * nbNeighboursMin < size - k + 1) && (oneQuery(filterOrTruth, s.substr(j + numberOfJumps * nbNeighboursMin, k))) == false);
-    numberOfJumps -= 1;
-    // std::cout << "returning numberOfJumps = numberOfJumps" << numberOfJumps << std::endl;
-    // if (!(j + nbNeighboursMin < size - k + 1)) {
-    //     // no positive kmer next
-    //     std::cout << "j + nbNeighboursMin if after the end of the query" << std::endl;
-    //     return j;
-    // }
-    // std::cout << "j=" << j << " si a positive" << std::endl;
-
-    // j is now the index of a posiive kmer in the query. Let's backtrack, one kmer by one kmer, until we fond a negative kmer.
-
-    //TODO eviter dernier query
-    // while (oneQuery(filterOrTruth, s.substr(j - 1, k))) {
-    //     std::cout << j - 1 << " is a positive" << std::endl;
-    //     j--;
-    //     nbQuery++;
-    // }
-
-    // nbQuery++;
-    return numberOfJumps;
-}
-
-namespace truth {
-inline std::vector<bool> queryTruth(const robin_hood::unordered_set<std::string>& truth, const std::string& seq, int k) {
-    unsigned long long start = 0;
-    unsigned long long l = seq.length();
-    std::vector<bool> response(l - k + 1);
-
-    while ((start + k) <= l) {
-        response[start] = truth.contains(seq.substr(start, k));
-        start++;
-    }
-    return response;
-}
-}  // namespace truth
-
-namespace noQTF {
-inline std::vector<bool> query(bf::bloom_filter* filter, const std::string& s, const unsigned int& k) {
-    checknonNull(filter, "Nullptr passed to query function.");
-    unsigned long long size = s.size();
-    std::vector<bool> response(size - k + 1);
-
-    for (unsigned long long i = 0; i < size - k + 1; i++) {
-        response[i] = filter->lookup(s.substr(i, k));
-    }
-
-    return response;
-}
-}  // namespace noQTF
-
-//TODO move to internal
-template <typename T>
-inline std::vector<bool> queryFilterOrTruth(const T& filterOrTruth, const std::string& s, const unsigned int& k, const unsigned int& nbNeighboursMin, unsigned long long& nbStretch, bool skip = false) {
-    const unsigned int smallK = k - nbNeighboursMin;
-    unsigned long long size = s.size();
-    std::vector<bool> response(size - smallK + 1 - nbNeighboursMin);
-    unsigned long long i = 0;              // index of the response vector
+    std::vector<bool> response(size - K + 1, false);
     unsigned long long stretchLength = 0;  // number of consecutive positives kmers
     unsigned long long j = 0;              // index of the query vector
-
+    bool extending_stretch = true;
     while (j < size - k + 1) {
-        if (oneQuery(filterOrTruth, s.substr(j, smallK))) {
-            stretchLength++;
-            j++;
-        } else {
-            if (stretchLength != 0) {
-                if (stretchLength > nbNeighboursMin) {
-                    nbStretch++;
-                    for (unsigned long long t = 0; t < stretchLength - nbNeighboursMin; t++) {
-                        response[i] = true;
-                        i++;
-                    }
-                    for (unsigned long long t = 0; t < nbNeighboursMin; t++) {
-                        response[i] = false;
-                        i++;
-                    }
-                } else {
-                    for (unsigned long long t = 0; t < stretchLength; t++) {
-                        response[i] = false;
-                        i++;
-                    }
-                }
-                stretchLength = 0;
-            }
-
-            // skip queries between current position and the next positive kmer
-            if (skip && (nbNeighboursMin > 0)) {
-                unsigned long long dontCare = 0;
-                unsigned long long numberOfJumps = getNextPositiveKmerPositionInTheQuery(filterOrTruth, s, smallK, nbNeighboursMin, j, dontCare);
-                // std::cout << "numberOfJumps = " << numberOfJumps << std::endl;
-                for (unsigned long long temp = 0; temp < nbNeighboursMin * numberOfJumps; temp++) {
-                    response[i] = false;
-                    i++;
-                    j++;
-                }
-            }
-
-            response[i] = 0;
-            i++;
-            j++;
-        }
-    }
-    if (stretchLength != 0) {
-        if (stretchLength > nbNeighboursMin) {
-            nbStretch++;
-            for (unsigned long long k = 0; k < stretchLength; k++) {
-                response[i] = true;
-                i++;
+        if (amq.contains(s.substr(j, k), canonical)) {
+            if (extending_stretch) {
+                stretchLength++;
+                j++;
+            } else {
+                extending_stretch = true;
+                j = j - z;
             }
         } else {
-            for (unsigned long long k = 0; k < stretchLength; k++) {
-                response[i] = false;
-                i++;
+            if (stretchLength >= z) {
+                for (unsigned long long t = j - stretchLength; t < j - z; t++) response[t] = true;
             }
+            stretchLength = 0;
+            extending_stretch = false;
+            j = j + z + 1;
         }
-        stretchLength = 0;
     }
+    // Last values:
+    if (stretchLength >= z) {
+        for (unsigned long long t = size - k + 1 - stretchLength; t < size - K + 1; t++) response[t] = true;
+    }
+
     return response;
 }
 
+}  // namespace findere_internal
+
 namespace findere {
+/**
+ * @brief Computes the number of shared position between the query and the index given the response of findere.
+ * @param bv The result of the query.
+ * @param K the value of K.
+ * @return The number of shared position between the query and the index.
+ */
+inline unsigned long long get_nb_positions_covered(std::vector<bool> bv, const unsigned int K) {
+    unsigned long long nb_positions_covered = 0;  // NB pos covered by at least one shared K-mer
+    long long last_covered_position = -1;
+    long long pos = 0;
+    for (auto shared : bv) {
+        if (shared) {
+            if (last_covered_position < pos) {
+                nb_positions_covered += K;
+            } else {
+                nb_positions_covered += pos + K - last_covered_position - 1;
+            }
 
-std::vector<bool> inline query(bf::basic_bloom_filter* filter, const std::string& s, const unsigned int& k, const unsigned int& nbNeighboursMin, unsigned long long& nbStretch, bool skip = false) {
-    return queryFilterOrTruth(filter, s, k, nbNeighboursMin, nbStretch, skip);
+            last_covered_position = pos + K - 1;
+        }
+        pos++;
+    }
+    return nb_positions_covered;
 }
 
-std::vector<bool> inline query(const robin_hood::unordered_set<std::string>& truth, const std::string& s, const unsigned int& k, const unsigned int& nbNeighboursMin, unsigned long long& nbStretch, bool skip = false) {
-    return queryFilterOrTruth(truth, s, k, nbNeighboursMin, nbStretch, skip);
+/**
+ * @brief Applies findere directly on a string.
+ * @param content the query as a string
+ * @param amq the amq wrapped within a customAMQ
+ * @param K the value of K
+ * @param z the value of z
+ * @return 
+ */
+inline void query_text(const std::string& filename, const customAMQ& amq, const unsigned int& K, const unsigned long long& z, const bool& canonical, customResponse& response) {
+    std::ifstream myfilegz(filename);
+    zstr::istream myfile(myfilegz);
+
+    std::string line;
+    std::string content;
+
+    while (std::getline(myfile, line)) {
+        content += line;
+    }
+    response.processResult(::findere_internal::queryFilterOrTruth(amq, content, K, z, canonical), K, "", content);
 }
 
-std::vector<bool> inline query(bf::basic_bloom_filter* filter, const std::string& s, const unsigned int& k, const unsigned long long& nbNeighboursMin, bool skip = false) {
-    unsigned long long dontCare = 0;
-    return queryFilterOrTruth(filter, s, k, nbNeighboursMin, dontCare, skip);
+/**
+ * @brief Query every read of the query using findere.
+ * @param filename the name of the file to be queried
+ * @param amq the amq wrapped within a customAMQ
+ * @param K the value of K
+ * @param z the value of z
+ * @param response a instance of customResponse that implements processResult.
+ * @return Nothing. Modify the parameter response instead.
+ */
+inline void query_all(const std::string& filename, const customAMQ& amq, const unsigned int& K, const unsigned long long& z, const bool& canonical, customResponse& response) {
+    FileManager read_files = FileManager();
+    read_files.addFile(filename);
+    std::string current_read;
+
+    while (!(current_read = read_files.get_next_read()).empty()) {
+        std::string current_data = read_files.get_data();
+        std::string current_header = current_data.substr(0, current_data.find('\n'));
+        std::vector<bool> res = ::findere_internal::queryFilterOrTruth(amq, current_read, K, z, canonical);
+        response.processResult(res, K, current_header, current_read);
+    }
 }
 
-std::vector<bool> inline query(const robin_hood::unordered_set<std::string>& truth, const std::string& s, const unsigned int& k, const unsigned int& nbNeighboursMin, bool skip = false) {
-    unsigned long long dontCare = 0;
-    return queryFilterOrTruth(truth, s, k, nbNeighboursMin, dontCare, skip);
-}
+//TODO: interet ?
+inline void query_all_paper(const std::string& filename, const customAMQ& amq, const unsigned int& K, const unsigned long long& z, const bool& canonical, customResponse& response) {
+    FileManager read_files = FileManager();
+    read_files.addFile(filename);
+    std::string current_read;
 
-std::vector<bool> inline query(const customAMQ& amq, const std::string& s, const unsigned int& k, const unsigned int& nbNeighboursMin, unsigned long long& nbStretch, bool skip = false) {
-    return queryFilterOrTruth(amq, s, k, nbNeighboursMin, nbStretch, skip);
-}
-
-std::vector<bool> inline query(const customAMQ& amq, const std::string& s, const unsigned int& k, const unsigned long long& nbNeighboursMin, bool skip = false) {
-    unsigned long long dontCare = 0;
-    return queryFilterOrTruth(amq, s, k, nbNeighboursMin, dontCare, skip);
+    while (!(current_read = read_files.get_next_read()).empty()) {
+        std::string current_data = read_files.get_data();
+        std::string current_header = current_data.substr(0, current_data.find('\n'));
+        std::vector<bool> res = ::findere_internal::queryFilterOrTruth(amq, current_read, K, z, canonical);
+        response.processResult(res, K, current_header, current_read);
+    }
 }
 
 }  // namespace findere

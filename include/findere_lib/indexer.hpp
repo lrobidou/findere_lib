@@ -8,7 +8,7 @@
 namespace findere_internal {
 
 inline std::tuple<bf::basic_bloom_filter*, unsigned long long> indexBioGivenBits(const std::vector<std::string>& filenames, const unsigned long long bits, const unsigned numHashes, const unsigned int& K, bool canonical) {
-    bf::basic_bloom_filter* filter = new bf::basic_bloom_filter(bf::make_hasher(numHashes), bits);
+    bf::basic_bloom_filter* filter = new bf::basic_bloom_filter(numHashes, bits);
     FileManager read_files = FileManager();
 
     for (auto const& filename : filenames) {
@@ -37,7 +37,7 @@ inline std::tuple<bf::basic_bloom_filter*, unsigned long long> indexBioGivenBits
 }
 
 inline std::tuple<bf::basic_bloom_filter*, unsigned long long> indexTextGivenBits(const std::vector<std::string>& filenames, unsigned long long bits, const unsigned numHashes, const unsigned int& K) {
-    bf::basic_bloom_filter* filter = new bf::basic_bloom_filter(bf::make_hasher(numHashes), bits);
+    bf::basic_bloom_filter* filter = new bf::basic_bloom_filter(numHashes, bits);
 
     for (auto const& filename : filenames) {
         std::string content = extractContentFromText(filename);
